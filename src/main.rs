@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 
-use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
+use poise::serenity_prelude as serenity;
 
 use shuttle_persist::PersistInstance;
 use shuttle_runtime::SecretStore;
@@ -15,8 +15,28 @@ struct Data {
 type Error = anyhow::Error;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
+async fn autocomplete_name<'a>(ctx: Context<'_>, partial: &str) -> Vec<String> {
+    if let (Ok(list), Some(guild)) = (ctx.data().persist.list(), ctx.guild_id()) {
+        let guild = guild.to_string();
+        list.iter()
+            .filter(|key| key.starts_with(&guild))
+            .map(|key| key.trim_start_matches(&format!("{guild}:")).to_string())
+            .filter(|name| name.contains(partial))
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Create a new event.
+///
+/// The [text] will display in the message as: "It has been x days since [text]"
 #[poise::command(slash_command)]
-async fn create(ctx: Context<'_>, name: String, text: String) -> Result<(), Error> {
+async fn create(
+    ctx: Context<'_>,
+    #[description = "Name of the event."] name: String,
+    #[description = "Text for the event"] text: String,
+) -> Result<(), Error> {
     let guild = ctx.guild_id().context("Invalid guild")?.to_string();
     let key = format!("{guild}:{name}");
 
@@ -31,8 +51,17 @@ async fn create(ctx: Context<'_>, name: String, text: String) -> Result<(), Erro
     }
 }
 
+/// Update the text for an existing event.
+///
+/// The [text] will display in the message as: "It has been x days since [text]"
 #[poise::command(slash_command)]
-async fn update(ctx: Context<'_>, name: String, text: String) -> Result<(), Error> {
+async fn update(
+    ctx: Context<'_>,
+    #[description = "Name of the event."]
+    #[autocomplete = "autocomplete_name"]
+    name: String,
+    #[description = "Text for the event (e.g. \"It has been x days since [text]\")"] text: String,
+) -> Result<(), Error> {
     let guild = ctx.guild_id().context("Invalid guild")?.to_string();
     let key = format!("{guild}:{name}");
 
@@ -46,8 +75,14 @@ async fn update(ctx: Context<'_>, name: String, text: String) -> Result<(), Erro
     }
 }
 
+/// Show the number of days since the last event occurence.
 #[poise::command(slash_command)]
-async fn days_since(ctx: Context<'_>, name: String) -> Result<(), Error> {
+async fn days_since(
+    ctx: Context<'_>,
+    #[description = "Name of the event."]
+    #[autocomplete = "autocomplete_name"]
+    name: String,
+) -> Result<(), Error> {
     let guild = ctx.guild_id().context("Invalid_guild")?.to_string();
     let key = format!("{guild}:{name}");
 
@@ -66,8 +101,14 @@ async fn days_since(ctx: Context<'_>, name: String) -> Result<(), Error> {
     }
 }
 
+/// Reset the time since the last event occurence.
 #[poise::command(slash_command)]
-async fn reset(ctx: Context<'_>, name: String) -> Result<(), Error> {
+async fn reset(
+    ctx: Context<'_>,
+    #[description = "Name of the event."]
+    #[autocomplete = "autocomplete_name"]
+    name: String,
+) -> Result<(), Error> {
     let guild = ctx.guild_id().context("Invalid_guild")?.to_string();
     let key = format!("{guild}:{name}");
 
@@ -83,8 +124,14 @@ async fn reset(ctx: Context<'_>, name: String) -> Result<(), Error> {
     }
 }
 
+/// Remove an existing event.
 #[poise::command(slash_command)]
-async fn remove(ctx: Context<'_>, name: String) -> Result<(), Error> {
+async fn remove(
+    ctx: Context<'_>,
+    #[description = "Name of the event."]
+    #[autocomplete = "autocomplete_name"]
+    name: String,
+) -> Result<(), Error> {
     let guild = ctx.guild_id().context("Invalid_guild")?.to_string();
     let key = format!("{guild}:{name}");
 
@@ -96,6 +143,7 @@ async fn remove(ctx: Context<'_>, name: String) -> Result<(), Error> {
     }
 }
 
+/// List all existing events.
 #[poise::command(slash_command)]
 async fn list(ctx: Context<'_>) -> Result<(), Error> {
     let guild = ctx.guild_id().context("Invalid_guild")?.to_string();
@@ -114,7 +162,11 @@ async fn list(ctx: Context<'_>) -> Result<(), Error> {
         }
     }
     s.pop();
-    ctx.say(s).await?;
+    if s.is_empty() {
+        ctx.say("No events found").await?;
+    } else {
+        ctx.say(s).await?;
+    }
 
     Ok(())
 }
@@ -142,10 +194,11 @@ async fn main(
         })
         .build();
 
-    let client = ClientBuilder::new(discord_token, GatewayIntents::non_privileged())
-        .framework(framework)
-        .await
-        .map_err(shuttle_runtime::CustomError::new)?;
+    let client =
+        serenity::ClientBuilder::new(discord_token, serenity::GatewayIntents::non_privileged())
+            .framework(framework)
+            .await
+            .map_err(shuttle_runtime::CustomError::new)?;
 
     Ok(client.into())
 }
