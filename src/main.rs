@@ -3,6 +3,7 @@ use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 
 use poise::serenity_prelude as serenity;
+use poise::CreateReply;
 
 use shuttle_persist::PersistInstance;
 use shuttle_runtime::SecretStore;
@@ -35,19 +36,20 @@ async fn autocomplete_name<'a>(ctx: Context<'_>, partial: &str) -> Vec<String> {
 async fn create(
     ctx: Context<'_>,
     #[description = "Name of the event."] name: String,
-    #[description = "Text for the event"] text: String,
+    #[description = "Text for the event (e.g. \"It has been x days since [text]\")"] text: String,
 ) -> Result<(), Error> {
-    let guild = ctx.guild_id().context("Invalid guild")?.to_string();
+    let guild = ctx.guild_id().context("*Invalid guild")?.to_string();
     let key = format!("{guild}:{name}");
 
     if let Err(_) = ctx.data().persist.load::<String>(&key) {
         ctx.data()
             .persist
             .save::<(String, DateTime<Utc>)>(&key, (text, Utc::now()))?;
-        ctx.say("Event created.").await?;
+
+        ctx.say("*Event created.").await?;
         Ok(())
     } else {
-        Err(anyhow!("Event already exists."))
+        Err(anyhow!("*Event already exists."))
     }
 }
 
@@ -69,9 +71,10 @@ async fn update(
         ctx.data()
             .persist
             .save::<(String, DateTime<Utc>)>(&key, (text, time))?;
+        ctx.say("*Event updated.").await?;
         Ok(())
     } else {
-        Err(anyhow!("Event does not exist."))
+        Err(anyhow!("*Event does not exist."))
     }
 }
 
@@ -83,7 +86,7 @@ async fn days_since(
     #[autocomplete = "autocomplete_name"]
     name: String,
 ) -> Result<(), Error> {
-    let guild = ctx.guild_id().context("Invalid_guild")?.to_string();
+    let guild = ctx.guild_id().context("Invalid guild")?.to_string();
     let key = format!("{guild}:{name}");
 
     if let Ok((text, time)) = ctx.data().persist.load::<(String, DateTime<Utc>)>(&key) {
@@ -97,7 +100,7 @@ async fn days_since(
         .await?;
         Ok(())
     } else {
-        Err(anyhow!("Event does not exist."))
+        Err(anyhow!("*Event does not exist."))
     }
 }
 
@@ -120,7 +123,7 @@ async fn reset(
             .await?;
         Ok(())
     } else {
-        Err(anyhow!("Event does not exist."))
+        Err(anyhow!("*Event does not exist."))
     }
 }
 
@@ -136,10 +139,10 @@ async fn remove(
     let key = format!("{guild}:{name}");
 
     if let Ok(_) = ctx.data().persist.remove(&key) {
-        ctx.say("Event removed.").await?;
+        ctx.say("*Event removed.").await?;
         Ok(())
     } else {
-        Err(anyhow!("Event does not exist."))
+        Err(anyhow!("*Event does not exist."))
     }
 }
 
@@ -148,27 +151,39 @@ async fn remove(
 async fn list(ctx: Context<'_>) -> Result<(), Error> {
     let guild = ctx.guild_id().context("Invalid_guild")?.to_string();
 
-    let mut s = String::new();
+    let mut list = String::new();
     for item in ctx.data().persist.list()? {
         if item.starts_with(&guild) {
             let name = item.trim_start_matches(&format!("{guild}:"));
-            s.push_str(name);
+            list.push_str(name);
 
             let (text, _) = ctx.data().persist.load::<(String, DateTime<Utc>)>(&item)?;
-            s.push_str(": ");
-            s.push_str(&text);
+            list.push_str(": ");
+            list.push_str(&text);
 
-            s.push('\n');
+            list.push('\n');
         }
     }
-    s.pop();
-    if s.is_empty() {
-        ctx.say("No events found").await?;
+    list.pop();
+
+    if list.is_empty() {
+        ctx.say("*No events found").await?;
     } else {
-        ctx.say(s).await?;
+        ctx.say(format!("*{list}")).await?;
     }
 
     Ok(())
+}
+
+fn maybe_make_ephemeral(_: Context<'_>, create_reply: CreateReply) -> CreateReply {
+    if let Some(ref content) = create_reply.content {
+        if content.starts_with('*') {
+            let new_content = content.trim_start_matches('*').to_string();
+            return create_reply.ephemeral(true).content(new_content);
+        }
+    }
+
+    create_reply
 }
 
 #[shuttle_runtime::main]
@@ -184,6 +199,7 @@ async fn main(
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
             commands: vec![create(), update(), days_since(), reset(), remove(), list()],
+            reply_callback: Some(maybe_make_ephemeral),
             ..Default::default()
         })
         .setup(|ctx, _ready, framework| {
